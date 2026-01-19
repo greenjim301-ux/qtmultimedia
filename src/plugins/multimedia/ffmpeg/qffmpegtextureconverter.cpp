@@ -11,6 +11,7 @@
 
 #if QT_CONFIG(vaapi)
 #  include <QtFFmpegMediaPluginImpl/private/qffmpeghwaccel_vaapi_p.h>
+#  include <QtFFmpegMediaPluginImpl/private/qffmpeghwaccel_drm_p.h>
 #endif
 
 #ifdef Q_OS_DARWIN

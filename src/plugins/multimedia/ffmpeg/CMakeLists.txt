@@ -111,6 +111,7 @@ if (QT_FEATURE_vaapi)
     qt_internal_extend_target(FFmpegMediaPluginImplPrivate
         SOURCES
             qffmpeghwaccel_vaapi.cpp qffmpeghwaccel_vaapi_p.h
+            qffmpeghwaccel_drm.cpp qffmpeghwaccel_drm_p.h
         NO_UNITY_BUILD_SOURCES
             # Conflicts with macros defined in X11.h, and Xlib.h
             qffmpeghwaccel_vaapi.cpp

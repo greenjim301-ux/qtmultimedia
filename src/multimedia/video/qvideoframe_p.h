@@ -23,7 +23,7 @@
 
 QT_BEGIN_NAMESPACE
 
-class QVideoFramePrivate : public QSharedData
+class Q_MULTIMEDIA_EXPORT QVideoFramePrivate : public QSharedData
 {
 public:
     QVideoFramePrivate() = default;

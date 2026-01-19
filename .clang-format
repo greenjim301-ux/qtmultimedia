@@ -1,0 +1,76 @@
+---
+Language: Cpp
+# Base style that closely matches Qt's requirements
+BasedOnStyle: WebKit
+
+# General
+Standard: C++17
+ColumnLimit: 100
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+
+# Braces
+# Functions and Classes on new line, Control statements on same line
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: false
+  AfterEnum: false
+  AfterFunction: true
+  AfterNamespace: false
+  AfterObjCDeclaration: false
+  AfterStruct: true
+  AfterUnion: false
+  AfterExternBlock: false
+  BeforeCatch: false
+  BeforeElse: false
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+
+# Indentation
+AccessModifierOffset: -4
+IndentCaseLabels: false
+IndentRequiresClause: true
+IndentWrappedFunctionNames: false
+
+# Alignment
+PointerAlignment: Right
+AlignAfterOpenBracket: Align
+AlignConsecutiveMacros: false
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Left
+AlignOperands: Align
+AlignTrailingComments: true
+
+# Arguments and Parameters
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+AlwaysBreakAfterReturnType: None
+AlwaysBreakTemplateDeclarations: Yes
+
+# Includes
+SortIncludes: true
+IncludeBlocks: Preserve
+
+# Qt Specifics
+ForEachMacros:
+  - foreach
+  - Q_FOREACH
+StatementMacros:
+  - Q_OBJECT
+  - Q_GADGET
+  - Q_PROPERTY
+  - Q_SIGNALS
+  - Q_SLOTS
+  - Q_ENUM
+  - Q_ENUM_NS
+  - Q_FLAG
+  - Q_FLAG_NS
+
+...
