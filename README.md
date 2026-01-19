@@ -1,7 +1,5 @@
 # Change Report
 
-中文请参考 [README_CN.md](README_CN.md)
-
 ## Summary of Changes
 This fork primarily focuses on exporting the AVFrame render API and introducing DRM (Direct Rendering Manager) hardware acceleration support for the FFmpeg backend in QtMultimedia.
 
