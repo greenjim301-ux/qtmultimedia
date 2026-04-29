@@ -3,95 +3,39 @@
 
 #include <QtFFmpegMediaPluginImpl/private/qavfsamplebufferdelegate_p.h>
 
+#define AVMediaType XAVMediaType
+extern "C" {
+#include <libavutil/hwcontext_videotoolbox.h>
+} // extern "C"
+#undef AVMediaType
+
+#include <QtCore/qsize.h>
+
 #include <QtMultimedia/private/qavfhelpers_p.h>
 #include <QtMultimedia/private/qvideoframe_p.h>
 
 #include <QtFFmpegMediaPluginImpl/private/qcvimagevideobuffer_p.h>
+#include <QtFFmpegMediaPluginImpl/private/qffmpegdarwinhwframehelpers_p.h>
 #define AVMediaType XAVMediaType
 #include <QtFFmpegMediaPluginImpl/private/qffmpegvideobuffer_p.h>
 #include <QtFFmpegMediaPluginImpl/private/qffmpeghwaccel_p.h>
 #undef AVMediaType
 
+#include <chrono>
 #include <optional>
+
+using namespace Qt::StringLiterals;
 
 QT_USE_NAMESPACE
 
-// Make sure this is compatible with the layout used in ffmpeg's hwcontext_videotoolbox
-static QFFmpeg::AVFrameUPtr allocHWFrame(
-    AVBufferRef *hwContext,
-    QAVFHelpers::QSharedCVPixelBuffer sharedPixBuf)
-{
-    Q_ASSERT(sharedPixBuf);
-
-    AVHWFramesContext *ctx = (AVHWFramesContext *)hwContext->data;
-    auto frame = QFFmpeg::makeAVFrame();
-    frame->hw_frames_ctx = av_buffer_ref(hwContext);
-    frame->extended_data = frame->data;
-
-    CVPixelBufferRef pixbuf = sharedPixBuf.release();
-    auto releasePixBufFn = [](void* opaquePtr, uint8_t *) {
-        CVPixelBufferRelease(static_cast<CVPixelBufferRef>(opaquePtr));
-    };
-    frame->buf[0] = av_buffer_create(nullptr, 0, releasePixBufFn, pixbuf, 0);
-
-    // It is convention to use 4th data plane for hardware frames.
-    frame->data[3] = (uint8_t *)pixbuf;
-    frame->width = ctx->width;
-    frame->height = ctx->height;
-    frame->format = AV_PIX_FMT_VIDEOTOOLBOX;
-    if (frame->width != (int)CVPixelBufferGetWidth(pixbuf)
-        || frame->height != (int)CVPixelBufferGetHeight(pixbuf)) {
-
-        // This can happen while changing camera format
-        return nullptr;
-    }
-    return frame;
-}
-
-@implementation QAVFSampleBufferDelegate {
+@implementation QT_MANGLE_NAMESPACE(QAVFSampleBufferDelegate) {
 @private
     std::function<void(const QVideoFrame &)> frameHandler;
     QFFmpeg::QAVFSampleBufferDelegateTransformProvider transformationProvider;
-    AVBufferRef *hwFramesContext;
     std::unique_ptr<QFFmpeg::HWAccel> m_accel;
-    qint64 startTime;
-    std::optional<qint64> baseTime;
+    std::chrono::microseconds startTime;
+    std::optional<std::chrono::microseconds> baseTime;
     qreal frameRate;
-}
-
-static QVideoFrame createHwVideoFrame(
-    QAVFSampleBufferDelegate &delegate,
-    const QAVFHelpers::QSharedCVPixelBuffer &imageBuffer,
-    QVideoFrameFormat format)
-{
-    Q_ASSERT(delegate.baseTime);
-
-    if (!delegate.m_accel)
-        return {};
-
-    auto avFrame = allocHWFrame(
-        delegate.m_accel->hwFramesContextAsBuffer(),
-        imageBuffer);
-    if (!avFrame)
-        return {};
-
-#ifdef USE_SW_FRAMES
-    {
-        auto swFrame = QFFmpeg::makeAVFrame();
-        /* retrieve data from GPU to CPU */
-        const int ret = av_hwframe_transfer_data(swFrame.get(), avFrame.get(), 0);
-        if (ret < 0) {
-            qWarning() << "Error transferring the data to system memory:" << ret;
-        } else {
-            avFrame = std::move(swFrame);
-        }
-    }
-#endif
-
-    avFrame->pts = delegate.startTime - *delegate.baseTime;
-
-    return QVideoFramePrivate::createFrame(std::make_unique<QFFmpegVideoBuffer>(std::move(avFrame)),
-                                           format);
 }
 
 - (instancetype)initWithFrameHandler:(std::function<void(const QVideoFrame &)>)handler
@@ -125,9 +69,6 @@ static QVideoFrame createHwVideoFrame(
     if (!frameHandler)
         return;
 
-    // NB: on iOS captureOutput/connection can be nil (when recording a video -
-    // avfmediaassetwriter).
-
     CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
     if (!imageBuffer || CFGetTypeID(imageBuffer) != CVPixelBufferGetTypeID()) {
         qWarning() << "Cannot get image buffer from sample buffer";
@@ -138,8 +79,19 @@ static QVideoFrame createHwVideoFrame(
         imageBuffer,
         QAVFHelpers::QSharedCVPixelBuffer::RefMode::NeedsRef);
 
-    const CMTime time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
-    const qint64 frameTime = time.timescale ? time.value * 1000000 / time.timescale : 0;
+    QSize incomingFrameSize {
+        static_cast<int>(CVPixelBufferGetWidth(pixelBuffer.get())),
+        static_cast<int>(CVPixelBufferGetHeight(pixelBuffer.get())) };
+    Q_ASSERT(!incomingFrameSize.isEmpty());
+    CvPixelFormat incomingCvPixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer.get());
+
+    Q_ASSERT(m_accel);
+    m_accel->updateFramesContext(
+        av_map_videotoolbox_format_to_pixfmt(incomingCvPixelFormat),
+        incomingFrameSize);
+
+    std::chrono::microseconds frameTime =
+        QAVFHelpers::CMTimeToMicroseconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer));
     if (!baseTime) {
         baseTime = frameTime;
         startTime = frameTime;
@@ -163,7 +115,11 @@ static QVideoFrame createHwVideoFrame(
 
     format.setStreamFrameRate(frameRate);
 
-    auto frame = createHwVideoFrame(*self, pixelBuffer, format);
+    QVideoFrame frame = QFFmpeg::qVideoFrameFromCvPixelBuffer(
+        *m_accel,
+        startTime - *baseTime,
+        pixelBuffer,
+        format);
     if (!frame.isValid())
         frame = QVideoFramePrivate::createFrame(
             std::make_unique<QFFmpeg::CVImageVideoBuffer>(std::move(pixelBuffer)),
@@ -175,13 +131,15 @@ static QVideoFrame createHwVideoFrame(
         frame.setMirrored(presentationTransform.mirroredHorizontallyAfterRotation);
     }
 
-    frame.setStartTime(startTime - *baseTime);
-    frame.setEndTime(frameTime - *baseTime);
+    frame.setStartTime((startTime - *baseTime).count());
+    frame.setEndTime((frameTime - *baseTime).count());
     startTime = frameTime;
 
     frameHandler(frame);
 }
 
+// Sets the initial HWAccel. Should only be called once during
+// initialization.
 - (void)setHWAccel:(std::unique_ptr<QFFmpeg::HWAccel> &&)accel
 {
     m_accel = std::move(accel);

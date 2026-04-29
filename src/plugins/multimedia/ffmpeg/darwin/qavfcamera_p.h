@@ -97,11 +97,11 @@ private:
     [[nodiscard]] int getCurrentRotationAngleDegrees() const;
 
     QMediaCaptureSession *m_qMediaCaptureSession = nullptr;
-    AVCaptureSession *m_avCaptureSession = nullptr;
+    AVFScopedPointer<AVCaptureSession> m_avCaptureSession;
     AVFScopedPointer<AVCapturePhotoOutput> m_avCapturePhotoOutput;
-    AVCaptureDeviceInput *m_avCaptureDeviceVideoInput = nullptr;
-    AVCaptureVideoDataOutput *m_avCaptureVideoDataOutput = nullptr;
-    QAVFSampleBufferDelegate *m_qAvfSampleBufferDelegate = nullptr;
+    AVFScopedPointer<AVCaptureDeviceInput> m_avCaptureDeviceVideoInput;
+    AVFScopedPointer<AVCaptureVideoDataOutput> m_avCaptureVideoDataOutput;
+    AVFScopedPointer<QAVFSampleBufferDelegate> m_qAvfSampleBufferDelegate;
     AVPixelFormat m_hwPixelFormat = AV_PIX_FMT_NONE;
     // The current CVPixelFormat used by the AVCaptureVideoDataOutput.
     // This can in some cases be different from the AVCaptureDeviceFormat
@@ -116,7 +116,7 @@ private:
     // We might end up signaling a different QImageCapture than the one that requested
     // the capture. We should likely cancel any on-going still photo captures when this
     // happens.
-    AVFScopedPointer<QT_MANGLE_NAMESPACE(QAVFCapturePhotoOutputDelegate)> m_qAvfCapturePhotoOutputDelegate;
+    AVFScopedPointer<QAVFCapturePhotoOutputDelegate> m_qAvfCapturePhotoOutputDelegate;
     [[nodiscard]] bool stillPhotoCaptureInProgress() const
     {
         return m_qAvfCapturePhotoOutputDelegate.data();

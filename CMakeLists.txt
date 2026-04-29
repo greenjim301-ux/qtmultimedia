@@ -40,11 +40,6 @@ if(NOT TARGET Qt::Gui)
     return()
 endif()
 
-if(QNX AND CMAKE_SYSTEM_VERSION GREATER_EQUAL 800)
-    message(NOTICE "Skipping the build as multimedia is not supported on QNX8.0.")
-    return()
-endif()
-
 include(src/multimedia/Qt6MultimediaMacros.cmake)
 
 set(QT_BUILD_EXTRA_IDE_FILE_PATTERNS
@@ -69,6 +64,8 @@ set(QT_BUILD_EXTRA_IDE_FILE_PATTERNS
     src/multimedia/doc/src/platform-notes-apple.qdoc
     src/multimedia/doc/src/platform-notes-wasm.qdoc
     src/multimedia/doc/src/platform-notes-wayland.qdoc
+    src/multimedia/doc/src/platform-notes-linux.qdoc
+    src/multimedia/doc/src/backend-notes-gstreamer.qdoc
     src/multimedia/doc/src/qm-external-pages.qdoc
     src/multimedia/doc/src/qt6-changes.qdoc
     src/multimedia/doc/src/qtmultimedia-building-from-source.qdoc

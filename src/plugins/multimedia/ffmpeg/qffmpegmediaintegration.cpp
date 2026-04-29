@@ -18,15 +18,8 @@
 #include <QtMultimedia/private/qplatformmediaplugin_p.h>
 #include <QtMultimedia/qcameradevice.h>
 
-#ifdef Q_OS_MACOS
-#include <QtFFmpegMediaPluginImpl/private/qcgcapturablewindows_p.h>
-#include <QtFFmpegMediaPluginImpl/private/qcgwindowcapture_p.h>
-#include <QtFFmpegMediaPluginImpl/private/qavfscreencapture_p.h>
-#endif
-
 #ifdef Q_OS_DARWIN
-#include <QtFFmpegMediaPluginImpl/private/qavfcamerafactory_p.h>
-#include <QtFFmpegMediaPluginImpl/private/qavfimagecapture_p.h>
+#include <QtFFmpegMediaPluginImpl/private/qffmpegdarwinintegrationfactory_p.h>
 #include <QtMultimedia/private/qdarwinintegrationfactory_p.h>
 #endif
 
@@ -118,7 +111,7 @@ static void setupFFmpegLogger()
     av_log_set_callback(&qffmpegLogCallback);
 }
 
-static QPlatformSurfaceCapture *createScreenCaptureByBackend(QString backend)
+static QPlatformSurfaceCapture *createScreenCaptureByBackend(const QString& backend)
 {
     if (backend == u"grabwindow")
         return new QGrabWindowSurfaceCapture(QPlatformSurfaceCapture::ScreenSource{});
@@ -136,12 +129,12 @@ static QPlatformSurfaceCapture *createScreenCaptureByBackend(QString backend)
         return new QFFmpegScreenCaptureDxgi;
 #elif defined(Q_OS_MACOS)
     if (backend == u"avf")
-        return new QAVFScreenCapture;
+        return QFFmpeg::makeQAvfScreenCapture().release();
 #endif
     return nullptr;
 }
 
-static QPlatformSurfaceCapture *createWindowCaptureByBackend(QString backend)
+static QPlatformSurfaceCapture *createWindowCaptureByBackend(const QString& backend)
 {
     if (backend == u"grabwindow")
         return new QGrabWindowSurfaceCapture(QPlatformSurfaceCapture::WindowSource{});
@@ -158,7 +151,7 @@ static QPlatformSurfaceCapture *createWindowCaptureByBackend(QString backend)
 #endif
 #elif defined(Q_OS_MACOS)
     if (backend == u"cg")
-        return new QCGWindowCapture;
+        return QFFmpeg::makeQCgWindowCapture().release();
 #endif
     return nullptr;
 }
@@ -262,7 +255,7 @@ QPlatformSurfaceCapture *QFFmpegMediaIntegration::createScreenCapture(QScreenCap
 #if defined(Q_OS_WINDOWS)
     return new QFFmpegScreenCaptureDxgi;
 #elif defined(Q_OS_MACOS) // TODO: probably use it for iOS as well
-    return new QAVFScreenCapture;
+    return QFFmpeg::makeQAvfScreenCapture().release();
 #elif defined(Q_OS_ANDROID)
     return new QAndroidScreenCapture;
 #else
@@ -295,7 +288,7 @@ QPlatformSurfaceCapture *QFFmpegMediaIntegration::createWindowCapture(QWindowCap
 
     return new QGdiWindowCapture;
 #elif defined(Q_OS_MACOS) // TODO: probably use it for iOS as well
-    return new QCGWindowCapture;
+    return QFFmpeg::makeQCgWindowCapture().release();
 #else
     return new QGrabWindowSurfaceCapture(QPlatformSurfaceCapture::WindowSource{});
 #endif
@@ -310,10 +303,11 @@ QFFmpegMediaIntegration::createRecorder(QMediaRecorder *recorder)
 q23::expected<QPlatformImageCapture *, QString>
 QFFmpegMediaIntegration::createImageCapture(QImageCapture *imageCapture)
 {
+    Q_ASSERT(imageCapture);
 #if defined(Q_OS_ANDROID)
     return new QFFmpeg::QAndroidImageCapture(imageCapture);
 #elif defined(Q_OS_DARWIN)
-    return new QFFmpeg::QAVFImageCapture(imageCapture);
+    return QFFmpeg::makeQAvfImageCapture(*imageCapture).release();
 #else
     return new QFFmpegImageCapture(imageCapture);
 #endif
@@ -345,7 +339,7 @@ QPlatformMediaFormatInfo *QFFmpegMediaIntegration::createFormatInfo()
 QPlatformVideoDevices *QFFmpegMediaIntegration::createVideoDevices()
 {
 #if defined(Q_OS_ANDROID)
-    return new QAndroidVideoDevices(this);
+    return new QFFmpeg::QAndroidVideoDevices(this);
 #elif QT_CONFIG(linux_v4l)
     return new QV4L2CameraDevices(this);
 #elif defined Q_OS_DARWIN
@@ -365,16 +359,18 @@ QPlatformCapturableWindows *QFFmpegMediaIntegration::createCapturableWindows()
     if (QX11SurfaceCapture::isSupported())
         return new QX11CapturableWindows;
 #elif defined Q_OS_MACOS
-    return new QCGCapturableWindows;
+    return QFFmpeg::makeQCgCapturableWindows().release();
 #elif defined(Q_OS_WINDOWS)
     return new QWinCapturableWindows;
 #endif
     return nullptr;
 }
 
+QT_END_NAMESPACE
+
 #ifdef Q_OS_ANDROID
 
-Q_DECL_EXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void * /*reserved*/)
+extern "C" Q_DECL_EXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void * /*reserved*/)
 {
     static bool initialized = false;
     if (initialized)
@@ -391,12 +387,11 @@ Q_DECL_EXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void * /*reserved*/)
         return JNI_ERR;
 
     if (!QFFmpeg::QAndroidCamera::registerNativeMethods()
-            ||!QAndroidScreenCapture::registerNativeMethods()) {
+        || !QAndroidScreenCapture::registerNativeMethods()
+        || !QFFmpeg::QAndroidVideoDevices::registerNativeMethods()) {
         return JNI_ERR;
     }
 
     return JNI_VERSION_1_6;
 }
 #endif
-
-QT_END_NAMESPACE

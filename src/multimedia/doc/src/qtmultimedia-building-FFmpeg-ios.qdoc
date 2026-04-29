@@ -40,7 +40,7 @@ You can get the FFmpeg source code in these ways:
 FFmpeg sources to \c{~/ffmpeg/ffmpeg_src}.
 \badcode
 cd ~/ffmpeg/
-git clone --branch n7.1.2 https://git.ffmpeg.org/ffmpeg.git ffmpeg_src
+git clone --branch n7.1.3 https://git.ffmpeg.org/ffmpeg.git ffmpeg_src
 \endcode
 \endlist
 
@@ -68,6 +68,9 @@ To configure FFmpeg, run:
     --prefix=../installed \
     --cc="xcrun --sdk iphoneos clang -arch arm64" \
     --cxx="xcrun --sdk iphoneos clang++ -arch arm64" \
+    --extra-cflags="-miphoneos-version-min=16.0" \
+    --extra-cxxflags="-miphoneos-version-min=16.0" \
+    --extra-objcflags="-miphoneos-version-min=16.0" \
     --extra-ldflags="-miphoneos-version-min=16.0" \
     --install-name-dir='@rpath' \
     --disable-audiotoolbox

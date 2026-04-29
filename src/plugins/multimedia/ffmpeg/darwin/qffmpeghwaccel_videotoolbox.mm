@@ -14,6 +14,7 @@
 #include <QtGui/qopenglcontext.h>
 #include <QtGui/rhi/qrhi.h>
 
+#include <QtMultimedia/private/qavfhelpers_p.h>
 #include <QtMultimedia/private/qvideotexturehelper_p.h>
 #include <QtMultimedia/qvideoframeformat.h>
 
@@ -46,15 +47,15 @@ public:
     TextureConverterBackendPtr parentConverterBackend; // ensures the backend is deleted after the texture
 
     QRhi *rhi = nullptr;
-    CVMetalTextureRef cvMetalTexture[3] = {};
+    QCFType<CVMetalTextureRef> m_cvMetalTexture[3] = {};
 
 #if defined(Q_OS_MACOS)
-    CVOpenGLTextureRef cvOpenGLTexture;
+    QCFType<CVOpenGLTextureRef> m_cvOpenGLTexture;
 #elif defined(Q_OS_IOS)
-    CVOpenGLESTextureRef cvOpenGLESTexture;
+    QCFType<CVOpenGLESTextureRef> m_cvOpenGLESTexture;
 #endif
 
-    CVImageBufferRef m_buffer;
+    QAVFHelpers::QSharedCVPixelBuffer m_buffer;
 };
 }
 
@@ -68,47 +69,65 @@ VideoToolBoxTextureConverter::VideoToolBoxTextureConverter(QRhi *targetRhi)
         const auto *metal = static_cast<const QRhiMetalNativeHandles *>(rhi->nativeHandles());
 
         // Create a Metal Core Video texture cache from the pixel buffer.
-        Q_ASSERT(!cvMetalTextureCache);
-        if (CVMetalTextureCacheCreate(
-                        kCFAllocatorDefault,
-                        nil,
-                        (id<MTLDevice>)metal->dev,
-                        nil,
-                        &cvMetalTextureCache) != kCVReturnSuccess) {
-            qWarning() << "Metal texture cache creation failed";
+        Q_ASSERT(!m_cvMetalTextureCache);
+        CVMetalTextureCacheRef outCvMetalTexCacheRef = nullptr;
+        CVReturn cvReturn = CVMetalTextureCacheCreate(
+            kCFAllocatorDefault,
+            nil,
+            (id<MTLDevice>)metal->dev,
+            nil,
+            &outCvMetalTexCacheRef);
+        if (cvReturn != kCVReturnSuccess) {
+            qCWarning(qLcVideotoolbox) << "Metal texture cache creation failed";
             rhi = nullptr;
         }
+
+        Q_ASSERT(outCvMetalTexCacheRef);
+        m_cvMetalTextureCache = QCFType<CVMetalTextureCacheRef>{ outCvMetalTexCacheRef };
+
     } else if (rhi->backend() == QRhi::OpenGLES2) {
 #if QT_CONFIG(opengl)
 #ifdef Q_OS_MACOS
         const auto *gl = static_cast<const QRhiGles2NativeHandles *>(rhi->nativeHandles());
 
-        auto nsGLContext = gl->context->nativeInterface<QNativeInterface::QCocoaGLContext>()->nativeContext();
-        auto nsGLPixelFormat = nsGLContext.pixelFormat.CGLPixelFormatObj;
-
         // Create an OpenGL CoreVideo texture cache from the pixel buffer.
-        if (CVOpenGLTextureCacheCreate(
-                        kCFAllocatorDefault,
-                        nullptr,
-                        reinterpret_cast<CGLContextObj>(nsGLContext.CGLContextObj),
-                        nsGLPixelFormat,
-                        nil,
-                        &cvOpenGLTextureCache)) {
-            qWarning() << "OpenGL texture cache creation failed";
+        NSOpenGLContext *nsGLContext =
+            gl->context->nativeInterface<QNativeInterface::QCocoaGLContext>()->nativeContext();
+        CGLPixelFormatObj nsGLPixelFormat = nsGLContext.pixelFormat.CGLPixelFormatObj;
+        CVOpenGLTextureCacheRef outCvGlTexCacheRef = nullptr;
+        CVReturn cvReturn = CVOpenGLTextureCacheCreate(
+            kCFAllocatorDefault,
+            nullptr,
+            reinterpret_cast<CGLContextObj>(nsGLContext.CGLContextObj),
+            nsGLPixelFormat,
+            nil,
+            &outCvGlTexCacheRef);
+        if (cvReturn != kCVReturnSuccess) {
+            qCWarning(qLcVideotoolbox) << "OpenGL texture cache creation failed";
             rhi = nullptr;
         }
+
+        Q_ASSERT(outCvGlTexCacheRef);
+        m_cvOpenGLTextureCache = QCFType<CVOpenGLTextureCacheRef>{ outCvGlTexCacheRef };
+
 #endif
 #ifdef Q_OS_IOS
         // Create an OpenGL CoreVideo texture cache from the pixel buffer.
-        if (CVOpenGLESTextureCacheCreate(
-                        kCFAllocatorDefault,
-                        nullptr,
-                        [EAGLContext currentContext],
-                        nullptr,
-                        &cvOpenGLESTextureCache)) {
-            qWarning() << "OpenGL texture cache creation failed";
+        CVOpenGLESTextureCacheRef outCvGlEsTexCacheRef = nullptr;
+        CVReturn cvReturn = CVOpenGLESTextureCacheCreate(
+            kCFAllocatorDefault,
+            nullptr,
+            [EAGLContext currentContext],
+            nullptr,
+            &outCvGlEsTexCacheRef);
+        if (cvReturn != kCVReturnSuccess) {
+            qCWarning(qLcVideotoolbox) << "OpenGLES texture cache creation failed";
             rhi = nullptr;
         }
+
+        Q_ASSERT(outCvGlEsTexCacheRef);
+        m_cvOpenGLESTextureCache = QCFType<CVOpenGLESTextureCacheRef>{ outCvGlEsTexCacheRef };
+
 #endif
 #else
         rhi = nullptr;
@@ -123,11 +142,11 @@ VideoToolBoxTextureConverter::~VideoToolBoxTextureConverter()
 
 void VideoToolBoxTextureConverter::freeTextureCaches()
 {
-    cvMetalTextureCache = nullptr;
+    m_cvMetalTextureCache = nullptr;
 #if defined(Q_OS_MACOS)
-    cvOpenGLTextureCache = nullptr;
+    m_cvOpenGLTextureCache = nullptr;
 #elif defined(Q_OS_IOS)
-    cvOpenGLESTextureCache = nullptr;
+    m_cvOpenGLESTextureCache = nullptr;
 #endif
 }
 
@@ -172,21 +191,21 @@ VideoToolBoxTextureConverter::createTextureHandles(AVFrame *frame,
     bool needsConversion = false;
     QVideoFrameFormat::PixelFormat pixelFormat = QFFmpegVideoBuffer::toQtPixelFormat(HWAccel::format(frame), &needsConversion);
     if (needsConversion) {
-        // qDebug() << "XXXXXXXXXXXX pixel format needs conversion" << pixelFormat << HWAccel::format(frame);
         return nullptr;
     }
 
-    CVPixelBufferRef buffer = (CVPixelBufferRef)frame->data[3];
+    auto cvPixelBufferRef = reinterpret_cast<CVPixelBufferRef>(frame->data[3]);
+    Q_ASSERT(cvPixelBufferRef);
 
     auto textureHandles = std::make_unique<VideoToolBoxTextureHandles>();
     textureHandles->parentConverterBackend = shared_from_this();
-    textureHandles->m_buffer = buffer;
+    textureHandles->m_buffer = QAVFHelpers::QSharedCVPixelBuffer(
+        cvPixelBufferRef,
+        QAVFHelpers::QSharedCVPixelBuffer::RefMode::NeedsRef);
     textureHandles->rhi = rhi;
-    CVPixelBufferRetain(buffer);
 
     auto *textureDescription = QVideoTextureHelper::textureDescription(pixelFormat);
-    int bufferPlanes = CVPixelBufferGetPlaneCount(buffer);
-    //    qDebug() << "XXXXX createTextureHandles" << pixelFormat << bufferPlanes << buffer;
+    int bufferPlanes = CVPixelBufferGetPlaneCount(textureHandles->m_buffer.get());
 
     if (rhi->backend() == QRhi::Metal) {
         // First check that all planes have pixel-formats that we can handle,
@@ -199,8 +218,8 @@ VideoToolBoxTextureConverter::createTextureHandles(AVFrame *frame,
         }
 
         for (int plane = 0; plane < bufferPlanes; ++plane) {
-            size_t width = CVPixelBufferGetWidth(buffer);
-            size_t height = CVPixelBufferGetHeight(buffer);
+            size_t width = CVPixelBufferGetWidth(textureHandles->m_buffer.get());
+            size_t height = CVPixelBufferGetHeight(textureHandles->m_buffer.get());
             width = textureDescription->widthForPlane(width, plane);
             height = textureDescription->heightForPlane(height, plane);
 
@@ -209,59 +228,72 @@ VideoToolBoxTextureConverter::createTextureHandles(AVFrame *frame,
                 rhiTextureFormatToMetalFormat(textureDescription->rhiTextureFormat(plane, rhi));
 
             // Create a CoreVideo pixel buffer backed Metal texture image from the texture cache.
+            CVMetalTextureRef outCvMetalTexRef = nullptr;
             auto ret = CVMetalTextureCacheCreateTextureFromImage(
-                            kCFAllocatorDefault,
-                            cvMetalTextureCache,
-                            buffer, nil,
-                            metalPixelFormatForPlane,
-                            width, height,
-                            plane,
-                            &textureHandles->cvMetalTexture[plane]);
+                kCFAllocatorDefault,
+                m_cvMetalTextureCache,
+                textureHandles->m_buffer.get(),
+                nil,
+                metalPixelFormatForPlane,
+                width, height,
+                plane,
+                &outCvMetalTexRef);
+            if (ret != kCVReturnSuccess) {
+                qCWarning(qLcVideotoolbox) << "Metal texture creation failed" << ret;
+                return nullptr;
+            }
 
-            if (ret != kCVReturnSuccess)
-                qWarning() << "texture creation failed" << ret;
-//            auto t = CVMetalTextureGetTexture(textureHandles->cvMetalTexture[plane]);
-//            qDebug() << "    metal texture for plane" << plane << "is" << quint64(textureHandles->cvMetalTexture[plane]) << width << height;
-//            qDebug() << "    " << t.iosurfacePlane << t.pixelFormat << t.width << t.height;
+            Q_ASSERT(outCvMetalTexRef);
+            textureHandles->m_cvMetalTexture[plane] = QCFType<CVMetalTextureRef>{ outCvMetalTexRef };
+
         }
     } else if (rhi->backend() == QRhi::OpenGLES2) {
 #if QT_CONFIG(opengl)
 #ifdef Q_OS_MACOS
-        CVOpenGLTextureCacheFlush(cvOpenGLTextureCache, 0);
+        CVOpenGLTextureCacheFlush(m_cvOpenGLTextureCache, 0);
+        CVOpenGLTextureRef outCvGlTexRef = nullptr;
         // Create a CVPixelBuffer-backed OpenGL texture image from the texture cache.
         const CVReturn cvret = CVOpenGLTextureCacheCreateTextureFromImage(
-                        kCFAllocatorDefault,
-                        cvOpenGLTextureCache,
-                        buffer,
-                        nil,
-                        &textureHandles->cvOpenGLTexture);
+            kCFAllocatorDefault,
+            m_cvOpenGLTextureCache,
+            textureHandles->m_buffer.get(),
+            nil,
+            &outCvGlTexRef);
         if (cvret != kCVReturnSuccess) {
             qCWarning(qLcVideotoolbox) << "OpenGL texture creation failed" << cvret;
             return nullptr;
         }
 
-        Q_ASSERT(CVOpenGLTextureGetTarget(textureHandles->cvOpenGLTexture) == GL_TEXTURE_RECTANGLE);
+        Q_ASSERT(outCvGlTexRef);
+        Q_ASSERT(CVOpenGLTextureGetTarget(outCvGlTexRef) == GL_TEXTURE_RECTANGLE);
+        textureHandles->m_cvOpenGLTexture = QCFType<CVOpenGLTextureRef>{ outCvGlTexRef };
+
 #endif
 #ifdef Q_OS_IOS
-        CVOpenGLESTextureCacheFlush(cvOpenGLESTextureCache, 0);
+        CVOpenGLESTextureCacheFlush(m_cvOpenGLESTextureCache, 0);
+        CVOpenGLESTextureRef outCvGlTexRef = nullptr;
         // Create a CVPixelBuffer-backed OpenGL texture image from the texture cache.
         const CVReturn cvret = CVOpenGLESTextureCacheCreateTextureFromImage(
-                        kCFAllocatorDefault,
-                        cvOpenGLESTextureCache,
-                        buffer,
-                        nil,
-                        GL_TEXTURE_2D,
-                        GL_RGBA,
-                        CVPixelBufferGetWidth(buffer),
-                        CVPixelBufferGetHeight(buffer),
-                        GL_RGBA,
-                        GL_UNSIGNED_BYTE,
-                        0,
-                        &textureHandles->cvOpenGLESTexture);
+            kCFAllocatorDefault,
+            m_cvOpenGLESTextureCache,
+            textureHandles->m_buffer.get(),
+            nil,
+            GL_TEXTURE_2D,
+            GL_RGBA,
+            CVPixelBufferGetWidth(textureHandles->m_buffer.get()),
+            CVPixelBufferGetHeight(textureHandles->m_buffer.get()),
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            0,
+            &outCvGlTexRef);
         if (cvret != kCVReturnSuccess) {
             qCWarning(qLcVideotoolbox) << "OpenGL ES texture creation failed" << cvret;
             return nullptr;
         }
+
+        Q_ASSERT(outCvGlTexRef);
+        textureHandles->m_cvOpenGLESTexture = QCFType<CVOpenGLESTextureRef>{ outCvGlTexRef };
+
 #endif
 #endif
     }
@@ -276,16 +308,17 @@ VideoToolBoxTextureHandles::~VideoToolBoxTextureHandles()
 quint64 VideoToolBoxTextureHandles::textureHandle(QRhi &, int plane)
 {
     if (rhi->backend() == QRhi::Metal)
-        return cvMetalTexture[plane] ? qint64(CVMetalTextureGetTexture(cvMetalTexture[plane])) : 0;
+        return m_cvMetalTexture[plane] ? qint64(CVMetalTextureGetTexture(m_cvMetalTexture[plane])) : 0;
 #if QT_CONFIG(opengl)
     Q_ASSERT(plane == 0);
 #ifdef Q_OS_MACOS
-    return CVOpenGLTextureGetName(cvOpenGLTexture);
+    return CVOpenGLTextureGetName(m_cvOpenGLTexture);
 #endif
 #ifdef Q_OS_IOS
-    return CVOpenGLESTextureGetName(cvOpenGLESTexture);
+    return CVOpenGLESTextureGetName(m_cvOpenGLESTexture);
 #endif
 #endif
+    return 0;
 }
 
 }

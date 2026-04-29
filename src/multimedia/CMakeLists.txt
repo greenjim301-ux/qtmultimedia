@@ -72,7 +72,7 @@ qt_internal_add_module(Multimedia
         qmultimedia_enum_to_string_converter_p.h
         qmediadevices.cpp qmediadevices.h
         qmediaformat.cpp  qmediaformat.h
-        qmediametadata.cpp qmediametadata.h
+        qmediametadata.cpp qmediametadata.h qmediametadata_p.h
         qmediastoragelocation.cpp qmediastoragelocation_p.h
         qmediatimerange.cpp qmediatimerange.h
         qmultimediautils.cpp qmultimediautils_p.h
@@ -80,6 +80,7 @@ qt_internal_add_module(Multimedia
         qvideotransformation.cpp qvideotransformation_p.h
         qmediaframeinput.cpp qmediaframeinput_p.h
         qtmultimediaglobal.h qtmultimediaglobal_p.h
+        qmultimedia_source_resolver.cpp qmultimedia_source_resolver_p.h
         qerrorinfo_p.h
         qcachedvalue_p.h
         qmediainputencoderinterface_p.h
@@ -211,8 +212,20 @@ if (QT_FEATURE_pipewire)
             pipewire/qpipewire_spa_pod_support.cpp     pipewire/qpipewire_spa_pod_support_p.h
             pipewire/qpipewire_spa_pod_parser_support_p.h
             pipewire/qpipewire_support.cpp             pipewire/qpipewire_support_p.h
-            pipewire/qpipewire_symbolloader.cpp        pipewire/qpipewire_symbolloader_p.h
     )
+
+    if(QT_FEATURE_pipewire_symbolloader)
+        qt_internal_extend_target(Multimedia
+            SOURCES
+                pipewire/qpipewire_symbolloader.cpp pipewire/qpipewire_symbolloader_p.h
+        )
+    else()
+        qt_internal_extend_target(Multimedia
+            LIBRARIES
+                ${PipeWire_LIBRARIES}
+        )
+    endif()
+
 
     if (QT_FEATURE_pipewire_screencapture)
         qt_internal_extend_target(Multimedia
@@ -307,23 +320,16 @@ qt_internal_extend_target(Multimedia CONDITION WIN32
 
 qt_internal_extend_target(Multimedia CONDITION APPLE
     SOURCES
-        darwin/qdarwinaudiodevice.cpp darwin/qdarwinaudiodevice_p.h
-        darwin/qdarwinaudiosource.mm darwin/qdarwinaudiosource_p.h
-        darwin/qdarwinaudiosink.mm darwin/qdarwinaudiosink_p.h
-        darwin/qcoreaudioutils.cpp darwin/qcoreaudioutils_p.h
-        darwin/qdarwinaudiodevices.mm darwin/qdarwinaudiodevices_p.h
+        coreaudio/qcoreaudiodevice.cpp coreaudio/qcoreaudiodevice_p.h
+        coreaudio/qcoreaaudiosource.mm coreaudio/qcoreaaudiosource_p.h
+        coreaudio/qcoreaaudiosink.mm coreaudio/qcoreaaudiosink_p.h
+        coreaudio/qcoreaudioutils.cpp coreaudio/qcoreaudioutils_p.h
+        coreaudio/qcoreaudiodevices.mm coreaudio/qcoreaudiodevices_p.h
         darwin/qavfhelpers.mm darwin/qavfhelpers_p.h
     LIBRARIES
         ${FWCoreAudio}
         ${FWAudioToolbox}
         ${FWCoreVideo}
-)
-
-# we use blocks in qdarwinaudiodevices.mm, so we need to enable ARC
-set_source_files_properties(darwin/qdarwinaudiodevices.mm
-    PROPERTIES
-        COMPILE_FLAGS "-fobjc-arc"
-        SKIP_PRECOMPILE_HEADERS TRUE
 )
 
 qt_internal_extend_target(Multimedia CONDITION MACOS OR IOS
@@ -340,24 +346,26 @@ qt_internal_extend_target(Multimedia CONDITION MACOS OR IOS
 
 qt_internal_extend_target(Multimedia CONDITION MACOS
     SOURCES
-        darwin/qmacosaudiodatautils_p.h darwin/qmacosaudiodatautils.cpp
+        coreaudio/qmacosaudiodatautils_p.h coreaudio/qmacosaudiodatautils.cpp
 )
 
 qt_internal_extend_target(Multimedia CONDITION IOS OR TVOS OR VISIONOS
     SOURCES
-        darwin/qcoreaudiosessionmanager.mm darwin/qcoreaudiosessionmanager_p.h
+        coreaudio/qcoreaudiosessionmanager.mm coreaudio/qcoreaudiosessionmanager_p.h
     LIBRARIES
         ${FWAVFoundation}
         ${FWFoundation}
 )
 
-qt_internal_extend_target(Multimedia CONDITION QNX
+qt_internal_extend_target(Multimedia CONDITION QT_FEATURE_qnx_sound_architecture
     SOURCES
         qnx/qqnxaudiodevice.cpp qnx/qqnxaudiodevice_p.h
         qnx/qqnxaudiosink.cpp qnx/qqnxaudiosink_p.h
         qnx/qqnxaudiosource.cpp qnx/qqnxaudiosource_p.h
         qnx/qqnxaudioutils.cpp qnx/qqnxaudioutils_p.h
         qnx/qqnxaudiodevices.cpp qnx/qqnxaudiodevices_p.h
+    DEFINES
+        QT_MM_QNX_QSA
     INCLUDE_DIRECTORIES
         qnx
     LIBRARIES
@@ -398,12 +406,9 @@ qt_internal_extend_target(Multimedia CONDITION WIN32
 set(source_with_init_guid
     windows/qwindows_wasapi_warmup_client.cpp
     windows/qwindowsmuldimediautils.cpp
+    windows/qwindowsaudiodevices.cpp
     windows/qwindowsvideodevices.cpp
 )
-if(MINGW)
-    # mingw's uuid.lib does not contain PKEY_Device_FriendlyName and friends
-    list(APPEND source_with_init_guid windows/qwindowsaudiodevices.cpp)
-endif()
 
 set_source_files_properties(${source_with_init_guid} PROPERTIES
     COMPILE_DEFINITIONS     INITGUID

@@ -18,3 +18,10 @@ rhel-8.10 ci
 [setActiveSubtitleTrack_switchesSubtitles]
 rhel-8.10 ci
 macos-26 ci # QTBUG-140398
+
+[play_playsTransformedVideoOutput_whenVideoFileHasTransformationMetadata]
+wayland
+
+# QTBUG-145178
+[play_threeMediaPlayers]
+android ci

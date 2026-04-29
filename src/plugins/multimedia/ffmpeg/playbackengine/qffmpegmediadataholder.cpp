@@ -11,9 +11,12 @@
 #include "qloggingcategory.h"
 
 #include <QtMultimedia/qplaybackoptions.h>
+#include <QtMultimedia/private/qmediametadata_p.h>
 
 #include <math.h>
 #include <optional>
+
+#include <QtCore/private/qminimalflatset_p.h>
 
 extern "C" {
 #include "libavutil/display.h"
@@ -222,7 +225,20 @@ loadMedia(const QUrl &mediaUrl, QIODevice *stream, const QPlaybackOptions &playb
     }
 
     AVDictionaryHolder dict;
-    {
+    using RtmpProtocols =
+            QMinimalVarLengthFlatSet<std::basic_string_view<char16_t>, 6, std::less<>>;
+
+    static const RtmpProtocols rtmpProtocols{
+        u"rtmp", u"rtmpe", u"rtmps", u"rtmpt", u"rtmpse", u"rtmpte",
+    };
+
+    // for rtmp streams, the `timout` parameter implies acting as a server:
+    // https://ffmpeg.org/ffmpeg-protocols.html#rtmp
+    // This is not the semantics of QPlaybackOptions::networkTimeout, and will cause failures when
+    // opening streams
+    const bool setNetworkTimeout = !rtmpProtocols.contains(mediaUrl.scheme());
+
+    if (setNetworkTimeout) {
         const milliseconds timeout = playbackOptions.networkTimeout();
         av_dict_set_int(dict, "timeout", duration_cast<microseconds>(timeout).count(), 0);
         qCDebug(qLcMediaDataHolder) << "Using custom network timeout:" << timeout;
@@ -235,8 +251,7 @@ loadMedia(const QUrl &mediaUrl, QIODevice *stream, const QPlaybackOptions &playb
             if (probeSize >= minProbeSizeFFmpeg) {
                 av_dict_set_int(dict, "probesize", probeSize, 0);
                 qCDebug(qLcMediaDataHolder) << "Using custom probesize" << probeSize;
-            }
-            else
+            } else
                 qCWarning(qLcMediaDataHolder) << "Invalid probe size, using default";
         }
     }
@@ -250,6 +265,12 @@ loadMedia(const QUrl &mediaUrl, QIODevice *stream, const QPlaybackOptions &playb
         av_dict_set_int(dict, "flush_packets", 1, 0);
         qCDebug(qLcMediaDataHolder) << "Enabled low latency streaming";
     }
+
+    // QTBUG-145590: for hls streams, we want to disable http persistent connections to allow FFmpeg
+    // (before FFmpeg 8?) to mix raw and encrypted streams
+    // compare  https://trac.ffmpeg.org/ticket/10599
+    if (avformat_version() < AV_VERSION_INT(62, 12, 100))
+        av_dict_set_int(dict, "http_persistent", 0, 0);
 
     context->interrupt_callback.opaque = cancelToken.get();
     context->interrupt_callback.callback = [](void *opaque) {
@@ -429,8 +450,7 @@ void MediaDataHolder::updateMetaData()
     if (!m_cachedThumbnail.has_value())
         m_cachedThumbnail = getAttachedPicture(m_context.get());
 
-    if (!m_cachedThumbnail->isNull())
-        m_metaData.insert(QMediaMetaData::ThumbnailImage, m_cachedThumbnail.value());
+    QtMultimediaPrivate::setCoverArtImage(m_metaData, *m_cachedThumbnail);
 
     for (auto trackType :
          { QPlatformMediaPlayer::AudioStream, QPlatformMediaPlayer::VideoStream }) {

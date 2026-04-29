@@ -22,7 +22,79 @@ QSpan<const float> toFloatSpan(QSpan<const char> byteArray)
     };
 }
 
+struct AudioDeviceFormatLess
+{
+    bool operator()(const std::pair<QAudioDevice, QAudioFormat> &lhs,
+                    const std::pair<QAudioDevice, QAudioFormat> &rhs) const
+    {
+        auto cmp = qCompareThreeWay(lhs.first.id(), rhs.first.id());
+        if (cmp == Qt::strong_ordering::less)
+            return true;
+        if (cmp == Qt::strong_ordering::greater)
+            return false;
+
+        return std::tuple(lhs.second.sampleRate(), lhs.second.sampleFormat(),
+                          lhs.second.channelCount())
+                < std::tuple(rhs.second.sampleRate(), rhs.second.sampleFormat(),
+                             rhs.second.channelCount());
+    }
+};
+
 } // namespace
+
+// we keep a pool of engines with one engine per device/format
+std::shared_ptr<QRtAudioEngine>
+QSoundEffectPrivateWithPlayer::getEngineFor(const QAudioDevice &device, const QAudioFormat &format)
+{
+    if (device.isNull()) {
+        qWarning() << "QRtAudioEngine needs to be called with a valid device";
+        return nullptr;
+    }
+
+    if (format.sampleFormat() != QAudioFormat::Float) {
+        qWarning() << "QRtAudioEngine requires floating point samples";
+        return nullptr;
+    }
+
+    if (!device.isFormatSupported(format)) {
+        qWarning() << "QRtAudioEngine needs to be called with a supported fromat";
+        return nullptr;
+    }
+
+    static QMutex s_playerRegistryMutex;
+    static std::map<std::pair<QAudioDevice, QAudioFormat>, std::weak_ptr<QRtAudioEngine>,
+                    AudioDeviceFormatLess>
+            s_playerRegistry;
+
+    auto guard = std::lock_guard{ s_playerRegistryMutex };
+
+    auto key = std::pair{ device, format };
+    auto found = s_playerRegistry.find(key);
+    if (found != s_playerRegistry.end()) {
+        auto player = found->second.lock();
+        if (player)
+            return player;
+    }
+
+    // lazy clean up
+    q20::erase_if(s_playerRegistry, [](auto &&keyValuePair) {
+        return keyValuePair.second.expired();
+    });
+
+    // SoundEffect can prevent the stream from appear in an OS mixer
+    auto endpointRole = AudioEndpointRole::SoundEffect;
+
+    auto player = std::shared_ptr<QRtAudioEngine>(
+            new QRtAudioEngine{ device, format, endpointRole }, [](QRtAudioEngine *engine) {
+        if (engine->thread()->isCurrentThread())
+            delete engine;
+        else
+            engine->deleteLater();
+    });
+    s_playerRegistry.emplace(key, player);
+
+    return player;
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -164,11 +236,11 @@ QSoundEffectPrivateWithPlayer::QSoundEffectPrivateWithPlayer(QSoundEffect *q,
     resolveAudioDevice();
 
     QObject::connect(&m_mediaDevices, &QMediaDevices::audioOutputsChanged, this, [this] {
-        QAudioDevice defaultAudioDevice = QMediaDevices::defaultAudioOutput();
+        const QAudioDevice defaultAudioDevice = QMediaDevices::defaultAudioOutput();
         if (defaultAudioDevice == m_defaultAudioDevice)
             return;
 
-        m_defaultAudioDevice = QMediaDevices::defaultAudioOutput();
+        m_defaultAudioDevice = defaultAudioDevice;
         if (m_audioDevice.isNull())
             setResolvedAudioDevice(m_defaultAudioDevice);
     });
@@ -243,7 +315,7 @@ QAudioDevice QSoundEffectPrivateWithPlayer::audioDevice() const
     return m_audioDevice;
 }
 
-bool QSoundEffectPrivateWithPlayer::setSource(const QUrl &url, QSampleCache &sampleCache)
+void QSoundEffectPrivateWithPlayer::setSource(QUrl url, QSampleCache &sampleCache)
 {
     if (m_sampleLoadFuture) {
         m_sampleLoadFuture->cancelChain();
@@ -254,28 +326,27 @@ bool QSoundEffectPrivateWithPlayer::setSource(const QUrl &url, QSampleCache &sam
         QObject::disconnect(m_voiceFinishedConnection);
         m_playerReleaseTimer.callOnTimeout(this, [player = std::move(m_player)] {
             // we keep the player referenced for a little longer, so that later calls to
-            // QRtAudioEngine::getEngineFor will be able to reuse the existing instance
+            // getEngineFor will be able to reuse the existing instance
         }, Qt::SingleShotConnection);
         m_playerReleaseTimer.start();
     }
 
-    m_url = url;
     m_sample = {};
 
     if (url.isEmpty()) {
         setStatus(QSoundEffect::Null);
-        return false;
+        return;
     }
 
     if (!url.isValid()) {
         setStatus(QSoundEffect::Error);
-        return false;
+        return;
     }
 
     setStatus(QSoundEffect::Loading);
 
     m_sampleLoadFuture =
-            sampleCache.requestSampleFuture(url).then(this, [this](SharedSamplePtr result) {
+            sampleCache.requestSampleFuture(url).then(this, [this, url](SharedSamplePtr result) {
         if (result) {
             if (!formatIsSupported(result->format())) {
                 qWarning("QSoundEffect: QSoundEffect only supports mono or stereo files");
@@ -297,17 +368,10 @@ bool QSoundEffectPrivateWithPlayer::setSource(const QUrl &url, QSampleCache &sam
                 play();
             }
         } else {
-            qWarning("QSoundEffect: Error decoding source %ls", qUtf16Printable(m_url.toString()));
+            qWarning("QSoundEffect: Error decoding source %ls", qUtf16Printable(url.toString()));
             setStatus(QSoundEffect::Error);
         }
     });
-
-    return true;
-}
-
-QUrl QSoundEffectPrivateWithPlayer::url() const
-{
-    return m_url;
 }
 
 void QSoundEffectPrivateWithPlayer::setStatus(QSoundEffect::Status status)
@@ -465,7 +529,7 @@ bool QSoundEffectPrivateWithPlayer::updatePlayer(const SharedSamplePtr &sample)
         return false;
 
     m_player = [&]() -> std::shared_ptr<QRtAudioEngine> {
-        auto player = QRtAudioEngine::getEngineFor(m_resolvedAudioDevice, sample->format());
+        auto player = getEngineFor(m_resolvedAudioDevice, sample->format());
         if (player)
             return player;
 
@@ -481,7 +545,7 @@ bool QSoundEffectPrivateWithPlayer::updatePlayer(const SharedSamplePtr &sample)
             Q_UNREACHABLE_RETURN({});
         }
 
-        return QRtAudioEngine::getEngineFor(m_resolvedAudioDevice, alternativeFormat);
+        return std::make_shared<QRtAudioEngine>(m_resolvedAudioDevice, alternativeFormat);
     }();
 
     if (!m_player)

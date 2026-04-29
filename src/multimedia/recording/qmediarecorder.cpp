@@ -421,7 +421,7 @@ qint64 QMediaRecorder::duration() const
 #endif
 
 /*!
-    \qmlmethod QtMultimedia::MediaRecorder::record()
+    \qmlmethod void QtMultimedia::MediaRecorder::record()
     \brief Starts recording.
 
     While the recorder state is changed immediately to
@@ -500,7 +500,8 @@ QT_WARNING_POP
         if (settings.videoResolution() != d->encoderSettings.videoResolution())
             emit videoResolutionChanged();
 
-        if (!qFuzzyCompare(settings.videoFrameRate(), d->encoderSettings.videoFrameRate()))
+        if (!QtPrivate::fuzzyCompare(settings.videoFrameRate(),
+                                     d->encoderSettings.videoFrameRate()))
             emit videoFrameRateChanged();
 
         if (settings.videoBitRate() != d->encoderSettings.videoBitRate())
@@ -517,7 +518,7 @@ QT_WARNING_POP
     }
 }
 /*!
-    \qmlmethod QtMultimedia::MediaRecorder::pause()
+    \qmlmethod void QtMultimedia::MediaRecorder::pause()
     \brief Pauses recording.
 
     The recorder state is changed to QMediaRecorder.PausedState.
@@ -541,7 +542,7 @@ void QMediaRecorder::pause()
         d->control->pause();
 }
 /*!
-    \qmlmethod QtMultimedia::MediaRecorder::stop()
+    \qmlmethod void QtMultimedia::MediaRecorder::stop()
     \brief Stops the recording.
 
     The recorder will stop the recording. Processing pending video and audio data might

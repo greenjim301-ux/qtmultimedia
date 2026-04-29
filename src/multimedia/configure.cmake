@@ -70,7 +70,7 @@ if (DEFINED FFMPEG_DIR)
     set(ffmpeg_required REQUIRED)
 endif()
 
-qt_find_package(FFmpeg OPTIONAL_COMPONENTS AVCODEC AVFORMAT AVUTIL SWRESAMPLE SWSCALE PROVIDED_TARGETS FFmpeg::avcodec FFmpeg::avformat FFmpeg::avutil FFmpeg::swresample FFmpeg::swscale MODULE_NAME multimedia QMAKE_LIB ffmpeg ${ffmpeg_required})
+qt_find_package(FFmpeg PROVIDED_TARGETS FFmpeg::avcodec FFmpeg::avformat FFmpeg::avutil FFmpeg::swresample FFmpeg::swscale MODULE_NAME multimedia QMAKE_LIB ffmpeg ${ffmpeg_required})
 qt_find_package_extend_sbom(
     TARGETS
         FFmpeg::avcodec
@@ -131,6 +131,10 @@ qt_feature("pipewire" PRIVATE
 qt_feature("pipewire_screencapture" PRIVATE
     LABEL "PipeWire screen capture"
     CONDITION QT_FEATURE_dbus AND QT_FEATURE_pipewire
+)
+qt_feature("pipewire_symbolloader" PRIVATE
+    LABEL "PipeWire: load pipewire at run-time"
+    CONDITION QT_FEATURE_pipewire
 )
 qt_feature("alsa" PUBLIC PRIVATE
     LABEL "ALSA (experimental)"
@@ -197,6 +201,11 @@ qt_feature("mmrenderer" PUBLIC PRIVATE
     CONDITION MMRenderer_FOUND AND MMRendererCore_FOUND
     EMIT_IF QNX
 )
+qt_feature("qnx_sound_architecture" PRIVATE
+    LABEL "QNX sound architecture (QSA)"
+    CONDITION QNX AND CMAKE_SYSTEM_VERSION LESS 800
+    EMIT_IF QNX
+)
 qt_feature("native_android_backend" PUBLIC PRIVATE
     LABEL "Native Android backend (deprecated)"
     AUTODETECT true # It is still found and built by default
@@ -206,6 +215,11 @@ qt_feature("native_windows_backend" PUBLIC PRIVATE
     LABEL "Native Windows backend (deprecated)"
     AUTODETECT true # It is still found and built by default
     CONDITION WIN32
+)
+qt_feature("native_darwin_backend" PUBLIC PRIVATE
+    LABEL "Native Darwin (AVFoundation) backend"
+    AUTODETECT true # It is still found and built by default
+    CONDITION APPLE
 )
 qt_feature("pulseaudio" PUBLIC PRIVATE
     LABEL "PulseAudio"
@@ -255,7 +269,7 @@ qt_configure_add_summary_section(NAME "Low level Audio Backend")
 qt_configure_add_summary_entry(ARGS "alsa")
 qt_configure_add_summary_entry(ARGS "pulseaudio")
 qt_configure_add_summary_entry(ARGS "pipewire")
-qt_configure_add_summary_entry(ARGS "mmrenderer")
+qt_configure_add_summary_entry(ARGS "qnx_sound_architecture")
 qt_configure_add_summary_entry(ARGS "coreaudio")
 qt_configure_add_summary_entry(ARGS "aaudio")
 qt_configure_add_summary_entry(ARGS "wasm")
@@ -271,6 +285,8 @@ qt_configure_add_summary_entry(ARGS "mmrenderer")
 qt_configure_add_summary_entry(ARGS "avfoundation")
 qt_configure_add_summary_entry(ARGS "native_android_backend")
 qt_configure_add_summary_entry(ARGS "native_windows_backend")
+qt_configure_add_summary_entry(ARGS "native_darwin_backend")
+qt_configure_add_summary_entry(ARGS "wasm")
 qt_configure_end_summary_section()
 qt_configure_add_summary_section(NAME "Hardware acceleration and features")
 qt_configure_add_summary_entry(ARGS "linux_v4l")
@@ -290,19 +306,24 @@ qt_configure_add_report_entry(
 qt_configure_add_report_entry(
     TYPE WARNING
     MESSAGE "No media backend found"
-    CONDITION LINUX AND NOT (QT_FEATURE_gstreamer OR QT_FEATURE_ffmpeg)
+    CONDITION ((LINUX AND NOT (QT_FEATURE_gstreamer OR QT_FEATURE_ffmpeg)) OR
+               (ANDROID AND NOT (QT_FEATURE_native_android_backend OR QT_FEATURE_ffmpeg)) OR
+               (WIN32 AND NOT (QT_FEATURE_native_windows_backend OR QT_FEATURE_ffmpeg)) OR
+               (APPLE AND NOT (QT_FEATURE_native_darwin_backend OR QT_FEATURE_ffmpeg))
+              )
 )
 
 qt_configure_add_report_entry(
-    TYPE WARNING
-    MESSAGE "No media backend found"
-    CONDITION ANDROID AND NOT (QT_FEATURE_native_android_backend OR QT_FEATURE_ffmpeg)
-)
-
-qt_configure_add_report_entry(
-    TYPE WARNING
-    MESSAGE "No media backend found"
-    CONDITION WIN32 AND NOT (QT_FEATURE_native_windows_backend OR QT_FEATURE_ffmpeg)
+    TYPE ERROR
+    MESSAGE "QT_DEFAULT_MEDIA_BACKEND is not available on the platform or the corresponding feature is disabled."
+    CONDITION
+        (DEFINED QT_DEFAULT_MEDIA_BACKEND AND
+         ((QT_DEFAULT_MEDIA_BACKEND STREQUAL "ffmpeg" AND NOT QT_FEATURE_ffmpeg) OR
+          (QT_DEFAULT_MEDIA_BACKEND STREQUAL "gstreamer" AND NOT QT_FEATURE_gstreamer) OR
+          (QT_DEFAULT_MEDIA_BACKEND STREQUAL "windows" AND NOT QT_FEATURE_native_windows_backend) OR
+          (QT_DEFAULT_MEDIA_BACKEND STREQUAL "darwin" AND NOT QT_FEATURE_native_darwin_backend) OR
+          (QT_DEFAULT_MEDIA_BACKEND STREQUAL "android" AND NOT QT_FEATURE_native_android_backend)
+        ))
 )
 
 qt_configure_add_report_entry(

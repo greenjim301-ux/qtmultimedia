@@ -156,7 +156,7 @@ public:
 
     void updateBlending() {
         // ### respect video formats with Alpha
-        setFlag(Blending, !qFuzzyCompare(m_opacity, float(1.0)));
+        setFlag(Blending, !QtPrivate::fuzzyCompare(m_opacity, float(1.0)));
     }
 
     void setSurfaceFormat(const QRhiSwapChain::Format surfaceFormat)
@@ -174,7 +174,7 @@ public:
     QVideoFrameFormat m_videoFormat;
     QRhiSwapChain::Format m_surfaceFormat = QRhiSwapChain::SDR;
     float m_opacity = 1.0f;
-    QRhiSwapChainHdrInfo m_hdrInfo;
+    QRhiSwapChainHdrInfo m_hdrInfo{};
 
     QVideoFrameTexturePoolPtr m_texturePool = std::make_shared<QVideoFrameTexturePool>();
     std::array<QSGVideoTexture, 3> m_textures;

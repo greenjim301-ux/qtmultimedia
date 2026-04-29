@@ -30,6 +30,18 @@
 #include <array>
 #include <variant>
 
+#include <stdlib.h>
+#if __has_include(<alloca.h>)
+#  include <alloca.h>
+#endif
+#if __has_include(<malloc.h>)
+#  include <malloc.h>
+#endif
+
+#if defined(Q_CC_MSVC) && !defined(alloca)
+#  define alloca _alloca
+#endif
+
 QT_BEGIN_NAMESPACE
 
 class QIODevice;
@@ -210,6 +222,38 @@ constexpr bool validateAudioCallback(const AudioSourceCallback &audioCallback,
     return validateAudioCallbackImpl(audioCallback, format);
 }
 
+// if the requested buffer is reasonably small (64kb, big enougth for 16 channels, 1024 frames,
+// float32) we can use a stack-allocated temporary buffer.
+// otherwise we allocate a heap buffer.
+template <size_t limit = 1024 * 64, typename Functor>
+inline auto withTemporaryBuffer(size_t bufferSize, Functor &&f) noexcept QT_MM_NONBLOCKING
+{
+    if (bufferSize <= limit) Q_LIKELY_BRANCH {
+#ifdef alloca
+        std::byte *stackBuffer = reinterpret_cast<std::byte *>(alloca(bufferSize));
+        auto stackBufferSpan = QSpan<std::byte>{
+            stackBuffer,
+            qsizetype(bufferSize),
+        };
+#else
+        std::array<std::byte, limit> stackArray;
+        auto stackBufferSpan = QSpan<std::byte>{
+            stackArray,
+            qsizetype(bufferSize),
+        };
+#endif
+        return f(stackBufferSpan);
+    } else {
+        QtPrivate::ScopedRTSanDisabler allowAllocations;
+        auto heapBuffer = q20::make_unique_for_overwrite<std::byte[]>(bufferSize);
+        auto heapBufferSpan = QSpan<std::byte>{
+            heapBuffer.get(),
+            qsizetype(bufferSize),
+        };
+        return f(heapBufferSpan);
+    }
+}
+
 template <bool IsSink>
 inline void
 runAudioCallback(std::conditional_t<IsSink, AudioSinkCallback, AudioSourceCallback> &audioCallback,
@@ -248,6 +292,21 @@ inline void runAudioCallback(AudioSinkCallback &audioCallback, QSpan<std::byte> 
     QAudioHelperInternal::applyVolume(volume, format, hostBuffer, hostBuffer);
 }
 
+inline void runAudioCallback(AudioSinkCallback &audioCallback, QSpan<std::byte> hostBuffer,
+                             const QAudioFormat &applicationFormat, float volume,
+                             const QAudioFormat &hostFormat)
+{
+    using namespace QAudioHelperInternal;
+    const int32_t numberOfFrames = hostFormat.framesForBytes(hostBuffer.size());
+    const int32_t applicationBufferSize = applicationFormat.bytesForFrames(numberOfFrames);
+
+    withTemporaryBuffer(applicationBufferSize, [&](QSpan<std::byte> tempBuffer) {
+        runAudioCallback(audioCallback, tempBuffer, applicationFormat, volume);
+        convertSampleFormat(tempBuffer, toNativeSampleFormat(applicationFormat.sampleFormat()),
+                            hostBuffer, toNativeSampleFormat(hostFormat.sampleFormat()));
+    });
+}
+
 // NB: we we provide two overloads for running audio callbacks based on the host buffer:
 // * if the host buffer is immutable, we need to apply the volume on a temporary buffer
 // * if the host buffer is mutable, we can apply the volume in-place (currently unused)
@@ -257,31 +316,10 @@ inline void runAudioCallback(AudioSourceCallback &audioCallback, QSpan<const std
     if (volume == 1.0f) {
         runAudioCallback<false>(audioCallback, hostBuffer, format);
     } else {
-        // if the host buffer is reasonably small (64kb, big enougth for 16 channels, 1024 frames,
-        // float32) we can use a stack-allocated temporary buffer.
-        // otherwise we allocate a heap buffer.
-
-        constexpr qsizetype sizeEstimate = 1024 * 16 * sizeof(float);
-        if (hostBuffer.size() <= sizeEstimate) {
-            std::array<std::byte, sizeEstimate> stackBuffer;
-            QSpan<std::byte> stackBufferSpan{
-                stackBuffer.data(),
-                hostBuffer.size(),
-            };
-
-            QAudioHelperInternal::applyVolume(volume, format, hostBuffer, stackBufferSpan);
-            runAudioCallback<false>(audioCallback, stackBufferSpan, format);
-        } else {
-            QtPrivate::ScopedRTSanDisabler allowAllocations;
-
-            auto buffer = q20::make_unique_for_overwrite<std::byte[]>(hostBuffer.size());
-            auto heapBufferSpan = QSpan{
-                buffer.get(),
-                hostBuffer.size(),
-            };
-            QAudioHelperInternal::applyVolume(volume, format, hostBuffer, heapBufferSpan);
-            runAudioCallback<false>(audioCallback, heapBufferSpan, format);
-        }
+        withTemporaryBuffer(hostBuffer.size(), [&](QSpan<std::byte> tempBuffer) {
+            QAudioHelperInternal::applyVolume(volume, format, hostBuffer, tempBuffer);
+            runAudioCallback<false>(audioCallback, tempBuffer, format);
+        });
     }
 }
 
@@ -290,6 +328,26 @@ inline void runAudioCallback(AudioSourceCallback &audioCallback, QSpan<std::byte
 {
     QAudioHelperInternal::applyVolume(volume, format, hostBuffer, hostBuffer);
     runAudioCallback<false>(audioCallback, hostBuffer, format);
+}
+
+template <typename HostBufferType>
+inline void runAudioCallback(AudioSourceCallback &audioCallback, QSpan<HostBufferType> hostBuffer,
+                             const QAudioFormat &applicationFormat, float volume,
+                             const QAudioFormat &hostFormat)
+{
+    static_assert(std::is_same_v<HostBufferType, std::byte>
+                  || std::is_same_v<HostBufferType, const std::byte>);
+
+    using namespace QAudioHelperInternal;
+
+    const int32_t numberOfFrames = hostFormat.framesForBytes(hostBuffer.size());
+    const int32_t applicationBufferSize = applicationFormat.bytesForFrames(numberOfFrames);
+
+    withTemporaryBuffer(applicationBufferSize, [&](QSpan<std::byte> tempBuffer) {
+        convertSampleFormat(hostBuffer, toNativeSampleFormat(hostFormat.sampleFormat()), tempBuffer,
+                            toNativeSampleFormat(applicationFormat.sampleFormat()));
+        runAudioCallback(audioCallback, tempBuffer, applicationFormat, volume);
+    });
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

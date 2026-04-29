@@ -474,6 +474,14 @@ QCameraDevice QCamera::cameraDevice() const
 void QCamera::setCameraDevice(const QCameraDevice &cameraDevice)
 {
     Q_D(QCamera);
+
+    if (!QPlatformMediaIntegration::instance()->isCameraSwitchingDuringRecordingSupported()
+        && d->captureSession && d->captureSession->recorder()
+        && d->captureSession->recorder()->recorderState() == QMediaRecorder::RecordingState) {
+        qWarning("This media backend does not support camera device switching during recording");
+        return;
+    }
+
     auto dev = cameraDevice;
     if (dev.isNull())
         dev = QMediaDevices::defaultVideoInput();
@@ -1389,7 +1397,7 @@ bool QCamera::isWhiteBalanceModeSupported(QCamera::WhiteBalanceMode mode) const
 }
 
 /*!
-    \qmlmethod QtMultimedia::Camera::colorTemperature
+    \qmlproperty int QtMultimedia::Camera::colorTemperature
 
     Gets or sets the current color temperature.
 

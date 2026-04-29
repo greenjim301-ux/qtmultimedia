@@ -12,7 +12,7 @@
 #  include <QtMultimedia/private/qandroidaudiodevices_p.h>
 #endif
 #if defined(Q_OS_DARWIN)
-#  include <QtMultimedia/private/qdarwinaudiodevices_p.h>
+#  include <QtMultimedia/private/qcoreaudiodevices_p.h>
 #endif
 #if defined(Q_OS_WINDOWS)
 #  include <QtMultimedia/private/qwindowsaudiodevices_p.h>
@@ -27,7 +27,7 @@
 #if QT_CONFIG(pipewire)
 #  include <QtMultimedia/private/qpipewire_audiodevices_p.h>
 #endif
-#if defined(Q_OS_QNX)
+#if defined(Q_OS_QNX) && defined(QT_MM_QNX_QSA)
 #  include <QtMultimedia/private/qqnxaudiodevices_p.h>
 #endif
 #if defined(Q_OS_WASM)
@@ -39,7 +39,7 @@ QT_BEGIN_NAMESPACE
 std::unique_ptr<QPlatformAudioDevices> QPlatformAudioDevices::create()
 {
 #ifdef Q_OS_DARWIN
-    return std::make_unique<QDarwinAudioDevices>();
+    return std::make_unique<QCoreAudioDevices>();
 #endif
 #if defined(Q_OS_WINDOWS)
     return std::make_unique<QWindowsAudioDevices>();
@@ -86,7 +86,7 @@ std::unique_ptr<QPlatformAudioDevices> QPlatformAudioDevices::create()
 #if QT_CONFIG(alsa)
     return std::make_unique<QAlsaAudioDevices>();
 #endif
-#if defined(Q_OS_QNX)
+#if defined(Q_OS_QNX) && defined(QT_MM_QNX_QSA)
     return std::make_unique<QQnxAudioDevices>();
 #endif
 #if defined(Q_OS_WASM)

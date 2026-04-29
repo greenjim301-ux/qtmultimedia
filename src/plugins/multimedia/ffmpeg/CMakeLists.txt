@@ -120,7 +120,11 @@ if (QT_FEATURE_vaapi)
     )
 
     list(FIND FFMPEG_STUBS "va" va_stub_index)
-    if (NOT QT_LINK_STUBS_TO_FFMPEG_PLUGIN AND (FFMPEG_SHARED_LIBRARIES OR ${va_stub_index} EQUAL -1))
+    if (${va_stub_index} EQUAL -1)
+        # va is not provided via the stub mechanism: link directly to libva
+        qt_internal_extend_target(FFmpegMediaPluginImplPrivate LIBRARIES VAAPI::VAAPI)
+    elseif (NOT QT_LINK_STUBS_TO_FFMPEG_PLUGIN AND FFMPEG_SHARED_LIBRARIES)
+        # va is in FFMPEG_STUBS with shared FFmpeg: add libva stubs too
         target_compile_definitions(FFmpegMediaPluginImplPrivate PRIVATE Q_FFMPEG_PLUGIN_STUBS_ONLY)
         qt_internal_multimedia_find_vaapi_soversion()
         qt_internal_multimedia_add_private_stub_to_plugin("va")
@@ -130,9 +134,11 @@ endif()
 
 qt_internal_extend_target(FFmpegMediaPluginImplPrivate CONDITION APPLE
     SOURCES
+        darwin/qffmpegdarwinintegrationfactory_p.h
+        darwin/qffmpegdarwinhwframehelpers.mm darwin/qffmpegdarwinhwframehelpers_p.h
         darwin/qffmpeghwaccel_videotoolbox.mm darwin/qffmpeghwaccel_videotoolbox_p.h
         darwin/qavfcamerarotationtracker.mm darwin/qavfcamerarotationtracker_p.h
-        darwin/qavfcamera.mm darwin/qavfcamera_p.h darwin/qavfcamerafactory_p.h
+        darwin/qavfcamera.mm darwin/qavfcamera_p.h
         darwin/qcvimagevideobuffer.cpp darwin/qcvimagevideobuffer_p.h
         darwin/qavfsamplebufferdelegate.mm darwin/qavfsamplebufferdelegate_p.h
         darwin/qavfimagecapture.mm darwin/qavfimagecapture_p.h
@@ -281,13 +287,27 @@ if (QT_DEPLOY_FFMPEG AND FFMPEG_SHARED_LIBRARIES AND (BUILD_SHARED_LIBS OR UIKIT
     qt_internal_multimedia_copy_or_install_ffmpeg()
 endif()
 
+# In static builds, consumer projects must re-find FFmpeg at configure
+# time to recreate the FFmpeg::av* imported targets referenced by
+# FFmpegMediaPluginImplPrivate's link interface. Record the build-time
+# FFMPEG_DIR so that consumers don't have to pass -DFFMPEG_DIR=...
+# See QTBUG-145034.
+if(NOT BUILD_SHARED_LIBS AND DEFINED FFMPEG_DIR)
+    set_target_properties(FFmpegMediaPluginImplPrivate PROPERTIES
+        _qt_third_party_deps_extra_code
+        "set(__qt_initially_configured_ffmpeg_dir \"${FFMPEG_DIR}\")
+if(NOT DEFINED FFMPEG_DIR AND EXISTS \"\${__qt_initially_configured_ffmpeg_dir}\")
+    set(FFMPEG_DIR \"\${__qt_initially_configured_ffmpeg_dir}\")
+endif()")
+endif()
+
 if( NOT (UIKIT AND FFMPEG_SHARED_LIBRARIES) )
     qt_internal_extend_target(FFmpegMediaPluginImplPrivate PUBLIC_LIBRARIES ${ffmpeg_libs})
 else()
     # applications need to link against the ffmpeg libs via qt_add_ios_ffmpeg_libraries
     foreach(ffmpeg_lib IN LISTS ffmpeg_libs)
         qt_internal_add_target_include_dirs(FFmpegMediaPluginImplPrivate ${ffmpeg_lib})
-        target_include_directories(FFmpegMediaPluginImplPrivate PUBLIC
+        target_compile_definitions(FFmpegMediaPluginImplPrivate PUBLIC
             "$<TARGET_PROPERTY:${ffmpeg_lib},INTERFACE_COMPILE_DEFINITIONS>")
     endforeach()
 endif()

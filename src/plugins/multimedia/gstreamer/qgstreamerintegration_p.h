@@ -38,6 +38,12 @@ public:
 
     GstPipeline *gstPipeline(QMediaPlayer *) override;
     GstPipeline *gstPipeline(QMediaCaptureSession *) override;
+
+    GstBuffer *getRawGstBuffer(QVideoFrame &) override;
+
+    QVideoFrame createFrameFromGstBuffer(GstBuffer *buffer, const GstVideoInfo &videoInfo) override;
+    QVideoFrame createFrameFromGstBuffer(GstBuffer *buffer,
+                                         const GstVideoInfoDmaDrm &videoInfo) override;
 };
 
 class QGstreamerIntegration : public QPlatformMediaIntegration
@@ -67,6 +73,8 @@ public:
     GstDevice *videoDevice(const QByteArray &id);
 
     QAbstractPlatformSpecificInterface *platformSpecificInterface() override;
+
+    bool isCameraSwitchingDuringRecordingSupported() const override { return false; }
 
 protected:
     QPlatformMediaFormatInfo *createFormatInfo() override;
